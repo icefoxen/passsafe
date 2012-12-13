@@ -1,0 +1,25 @@
+This is intended to be a set of relatively simple scripts to manage a GPG-encrypted password safe file.
+
+A better way might honestly be to keep each file separate; this will let you see what you have, and alter and search them
+more individually; each one will just contain a date, username, and password.
+
+Right now you can just add or search for a password
+
+...a better way might be to have it open a vim window or something so you can scroll through and highlight the ones you
+want.  But that has issues because a) I want to avoid ever creating a temporary file of decrypted stuff even for an
+instant, and b) it makes you more vulnerable to shoulder-surfing.
+
+But having to put in a password every time you want to get a password doesn't... really... make sense.
+
+We could solve problem (a) by just piping output to less.  That also lets you search and all that such, but also lets
+people screen-surf much more effectively.
+
+Hmm.
+
+
+
+Operations:
+EDIT
+ADD
+RETRIEVE
+LIST

@@ -1,0 +1,226 @@
+#!/usr/bin/env python
+# (Relatively) simple password safe script...
+# Uses GPG to encrypt and decrypt the given file.
+# Having it do the sudo thing where it remembers the last time 
+# you entered the password and have it time out after X operations
+# or time might be nice, actually...
+# But, I don't know how to make that invulnerable to just changing
+# the system time.
+#
+# The file handling here has some race conditions, so make sure
+# nothing else is accessing the file or can otherwise fuck with it...
+#
+# Requires python > 2.7 and the gnupg module
+#
+# XXX: Verify string encoding
+
+DATADIR="."
+
+SAFEFILE="safe"
+
+EDITOR="rnano"
+
+NEW_PASSWORD_LENGTH=16
+NEW_PASSWORD_CHARS="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890!@#$%^&*()_+-=[]\{}|;':\",./<>?"
+
+###### END USER-EDITABLE CONTENT
+
+
+import argparse
+import datetime
+import random
+import os
+import stat
+import subprocess
+# XXX: split() and join() are methods on strings; you don't need this!
+import string
+
+# gnupg doesn't seem to have a way of specifying the symmetric cipher it uses.
+# However, you can specify one by adding the following line to your ~/.gnupg/gpg.conf:
+# cipher-algo AES256
+# The default appears to be CAST5 (aka CAST128), which seems decent at least.
+
+import gnupg
+gpg = gnupg.GPG()
+
+SAFEPATH = os.path.join(DATADIR, SAFEFILE)
+
+# Creates a new data file if none exists, asking for a passphrase
+# to encrypt it with.
+def newDataFile():
+   if not os.path.isfile(SAFEPATH):
+      print("Creating new password safe file; enter password to encrypt it with.")
+      passphrase = inputNewPassword()
+      # The dummy values here are kinda a hack...  D:
+      writeDataFile('\t\t\t', passphrase)
+
+def readDataFile(phrase):
+   with file(SAFEPATH, 'rb') as f:
+      data = gpg.decrypt_file(f, passphrase=phrase)
+      if not data.ok:
+         raise RuntimeError("Error reading password safe file " + SAFEPATH + ": " + data.stderr)
+      # Every time we touch the thing we set it to the right mode.
+      os.chmod(SAFEPATH, stat.S_IRUSR | stat.S_IWUSR)
+      return data.data
+
+def writeDataFile(str, phrase):
+   data = gpg.encrypt(str, None, passphrase=phrase, symmetric=True, output=SAFEPATH)
+   if not data.ok:
+      raise RuntimeError("Error reading password safe file " + SAFEPATH + ": " + data.stderr)
+   os.chmod(SAFEPATH, stat.S_IRUSR | stat.S_IWUSR)
+
+def inputPassword():
+   # XXX: Check for suprious tabs or other broken characters
+   # XXX: Terminal echo!  Scrollback buffer!  MAke sure it's not using readline!
+   return raw_input("Enter password: ")
+
+def inputNewPassword():
+   pass1 = raw_input("Enter NEW password: ")
+   pass2 = raw_input("Enter password again: ")
+   if pass1 != pass2:
+      print("Passwords do not match!")
+      exit(1)
+   return pass1
+
+
+# The data format shall be a series of lines, each made up of tab-separated fields.
+# Missing fields are okay-ish, but require doubling-up on the tabs.
+def parseData(str):
+   lines = string.split(str, '\n')
+   split = lambda x: string.split(x, '\t')
+   data = map(split, lines)
+   return data
+
+def deparseData(data):
+   join = lambda x: string.join(x, '\t')
+   lines = map(join, data)
+   str = string.join(lines, '\n')
+   return str
+
+# There shall be four fields: date \t description \t username \t password
+def addNewPassword(s, desc, username, passphrase):
+   now = datetime.date.today().isoformat()
+   newline = "\n{0}\t{1}\t{2}\t{3}".format(now, desc, username, passphrase)
+   return s + newline
+
+# XXX:
+# Wrong, and misnamed.  Should return ALL records
+def getRecord(data, desc):
+   #print(data)
+   for record in data:
+      #print(record)
+      d = record[1]
+      if desc in d:
+         return string.join(record, "\t")
+   return None
+
+def getList(data):
+   fields = []
+   for row in data:
+      #print(row)
+      fields.append("{0}\t{1}".format(row[0], row[1]))
+   s = string.join(fields, "\n")
+   return s
+
+def generateNewPassword():
+   passlength = NEW_PASSWORD_LENGTH
+   chars = NEW_PASSWORD_CHARS
+   charl = len(chars)
+   newpass = []
+   # XXX: Using the python prng here is insecure!
+   for i in range(passlength):
+      offset = random.randrange(0, charl)
+      newpass.append(chars[offset])
+   return string.join(newpass, '')
+
+def editFile(str):
+   pass
+
+def main():
+   p = argparse.ArgumentParser(
+      description="Add, search and view passwords in an encrypted file.",
+      epilog="Passwords are stored in {0} as a tab-separated table.  Don't try to put tabs into it!".format(SAFEPATH))
+   p.add_argument('-a', nargs=2, metavar=('category', 'username'),
+                  help='Input a new password (interactive)')
+   p.add_argument('-g', nargs=2, metavar=('category', 'username'),
+                  help='Generate new password (random)')
+   p.add_argument('-s', nargs=1, metavar=('category'),
+                  help='Search for all passwords with the given category (simple substring match)')
+   p.add_argument('-l', action='store_const', const=42,
+                  help='List categories (along with usernames and creation dates)')
+   p.add_argument('-e',  action='store_const', const=42,
+                  help='Edit the password file (don\'t screw it up)')
+   args = p.parse_args()
+   #print(args)
+
+   newDataFile()
+   if args.a:
+      category = args.a[0]
+      username = args.a[1]
+      print("Input password for the safe.")
+      p = inputPassword()
+      s = readDataFile(p)
+      print("Enter the new password you want to add.")
+      newpass = inputNewPassword()
+      ns = addNewPassword(s, category, username, newpass)
+      writeDataFile(ns, p)
+      print("Added.")
+
+   elif args.g:
+      category = args.g[0]
+      username = args.g[1]
+
+      print("Input password for the safe.")
+      p = inputPassword()
+      s = readDataFile(p)
+      newpass = generateNewPassword()
+      ns = addNewPassword(s, category, username, newpass)
+      writeDataFile(ns, p)
+      print("Your new password is: " + newpass)
+
+   elif args.s:
+      category = args.s[0]
+      print("Input password for the safe.")
+      p = inputPassword()
+      s = readDataFile(p)
+      data = parseData(s)
+      record = getRecord(data, category)
+      if record == None:
+         print("Not found.")
+      else:
+         print(record)
+
+   elif args.l:
+      print("Input password for the safe.")
+      p = inputPassword()
+      s = readDataFile(p)
+      data = parseData(s)
+      #print(data)
+      l = getList(data)
+      print(l)
+
+   elif args.e:
+      print("Input password for the safe.")
+      p = inputPassword()
+      s = readDataFile(p)
+      # XXX: Don't overwrite existing files, etc...
+      tmpfile = "safe.tmp"
+      with open(tmpfile, 'w') as f:
+         f.write(s)
+         f.write("New date here: ")
+      res = subprocess.call([EDITOR, tmpfile])
+      if res == 0:
+         # XXX: Not so great with huge files.
+         with open(tmpfile, 'r') as f:
+            ns = f.read()
+            writeDataFile(ns, p)
+      else:
+         print("Editor exited uncleanly, ignoring changes.")
+      # XXX: Delete temp file
+      #print("Not implemented yet...")
+
+   else:
+      p.print_help()
+
+if __name__ == '__main__':
+   main()

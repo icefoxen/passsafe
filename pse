@@ -1,0 +1,188 @@
+#!/usr/bin/env python
+# (Relatively) simple password safe script
+# Just opens an editor on a decryted file, then encrypts it again.
+# Uses GPG to encrypt and decrypt the given file with symmetric encryption.
+# Requires python > 2.7 and the gnupg module
+#
+# 1) This is NOT resistant to a professional cryptographer sitting in the
+# machine trying to break it by sophisticated methods (timing attacks, etc).
+# 2) This is NOT resistant to someone carrying the machine off and dissecting
+# its memory and hard drive for fragments of data!
+# 3) This is NOT resistant to someone who has root on the machine trying to
+# snoop on you as you use this program!  (Though it is safer if they can't directly
+# observe you.)
+# 4) Most importantly, this is NOT resistant to someone watching over your shoulder
+# as you access the file!!
+#
+# It IS resistant to someone cracking into the box remotely and swiping the data file.
+# It IS resistant to a normal machine user trying to spy on another normal user.
+#
+# #1 above is basically not a concern; if someone can do that I'm going to lose anyway.
+# #2 above can be improved by making sure /tmp is a tmpfs, and #2 and #3 can be made
+# better by either making sure the memory is not swapped out or by making sure swap
+# is encrypted.  Also by making sure /tmp is never backed up.
+# #3 could be improved by shredding the safe file before writing a new one.
+# #4 is always a concern, and I can't come up with a better way of doing it until someone
+# figures out a way to access a machine's clipboard over SSH.
+# #2 and #3 could be improved by somehow figuring out a way to make an arbitrary text editor
+# read from pipes instead of files, so we never write the temporary decrypted file.
+# #4 could be improved by just making your text file have a lot of whitespace in it, so it
+# only shows one password line at a time.  Or making your terminal window tiny.
+#
+# ...honestly there's a GPG plugin for VIM that probably does most of this anyway.  But
+# oh well.
+#
+# There's two main parts in the program where the data is decrypted and thus vulnerable:
+# the decrypted text file, and the decrypted data in memory.  Both of these are theoretically
+# accessible to a root user, which is the main problem.  The in-memory data is a bit safer,
+# at least until it gets swapped out to disk somewhere.
+# Then there are parts where the data is decrypted not inside this program:
+# The transport layer, which is going to be SSH, which I can't really improve
+# The client side security, which involves problematic things like scrollback buffers and shoulder
+# surfing, which is another big problem.
+
+
+DATADIR="."
+
+SAFEFILE="safe"
+
+EDITOR="rnano"
+
+NEW_PASSWORD_LENGTH=16
+NEW_PASSWORD_CHARS="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890!@#$%^&*()_+-=[]\{}|;':\",./<>?"
+
+###### END USER-EDITABLE CONTENT
+
+
+import argparse
+import datetime
+import getpass
+import random
+import os
+import stat
+import subprocess
+import tempfile
+
+# gnupg doesn't seem to have a way of specifying the symmetric cipher it uses.
+# However, you can specify one by adding the following line to your ~/.gnupg/gpg.conf:
+# cipher-algo AES256
+# The default appears to be CAST5 (aka CAST128), which seems decent at least.
+
+import gnupg
+gpg = gnupg.GPG()
+
+SAFEPATH = os.path.join(DATADIR, SAFEFILE)
+
+# Checks whether a file's mode is set to 0600
+def isModeOkay(filepath):
+   try:
+      st = os.stat(filepath)
+      permissions = stat.S_IMODE(st.st_mode)
+      correctPermissions = stat.S_IRUSR | stat.S_IWUSR
+      check = (permissions & correctPermissions) == permissions
+      return check
+   # os.stat() will throw an exception if the file doesn't  exist.
+   # If it doesn't exist, by definition it's unable to leak
+   # information, right?  :D
+   except OSError:
+      return True
+
+# Creates a new data file if none exists, asking for a passphrase
+# to encrypt it with.
+# This has a slight race condition between the file existance check and the
+# time that the file is actually created...
+def newDataFile():
+   if not os.path.isfile(SAFEPATH):
+      print("Creating new password safe file " + SAFEPATH + "; enter password to encrypt it with.")
+      passphrase = inputNewPassword()
+      writeDataFile('Date\tsitename\tusername\tpassword\n', passphrase)
+      if not isModeOkay(SAFEPATH):
+         raise RuntimeException("Warning!  For some reason the safe file was not created with the right permissions!")
+
+def readDataFile(phrase):
+   if not isModeOkay(SAFEPATH):
+      raise RuntimeError("Safe file does not have correct permissions!  Please fix this and try again.")
+   with file(SAFEPATH, 'rb') as f:
+      data = gpg.decrypt_file(f, passphrase=phrase)
+      if not data.ok:
+         raise RuntimeError("Error reading password safe file " + SAFEPATH + ": " + data.stderr)
+      return data.data
+
+def writeDataFile(str, phrase):
+   if not isModeOkay(SAFEPATH):
+      raise RuntimeError("Safe file does not have correct permissions!  Please fix this and try again.")
+   data = gpg.encrypt(str, None, passphrase=phrase, symmetric=True, output=SAFEPATH)
+   if not data.ok:
+      raise RuntimeError("Error reading password safe file " + SAFEPATH + ": " + data.stderr)
+
+def inputPassword():
+   return getpass.getpass("Enter password: ")
+
+# All the same concerns as above
+def inputNewPassword():
+   pass1 = getpass.getpass("Enter NEW password: ")
+   pass2 = getpass.getpass("Enter password again: ")
+   if pass1 != pass2:
+      print("Passwords do not match!")
+      exit(1)
+   return pass1
+
+def generateNewPassword():
+   passlength = NEW_PASSWORD_LENGTH
+   chars = NEW_PASSWORD_CHARS
+   charl = len(chars)
+   newpass = []
+   # Use the system PRNG... this will pull from /dev/urandom , which should
+   # HOPEFULLY be random enough for relatively small passwords.
+   # Getting access to real /dev/random seems harder.
+   rand = random.SystemRandom()
+   for i in range(passlength):
+      offset = rand.randrange(0, charl)
+      newpass.append(chars[offset])
+   return ''.join(newpass)
+
+
+def main():
+   p = argparse.ArgumentParser(
+      description="Edit an encrypted file suitable for a password safe.",
+      epilog="By default it uses rnano as the editor, which will not save any temp files or such.")
+   p.add_argument('-n',  action='store_const', const=42,
+                  help="Start with today's date and a random password already in the file")
+   args = p.parse_args()
+   #print(args)
+
+   # Set umask appropriately rw- --- ---
+   os.umask(0o177)
+
+   newDataFile()
+   print("Input password for " + SAFEPATH)
+   p = inputPassword()
+   # XXX: Reads all contents into memory; not so great with huge files.
+   s = readDataFile(p)
+   # This behavior is not portable to non-Unix systems (Windows);
+   # they cannot have the editor open the temp file while
+   # we still have an open handle to it.
+   # Python will automatically delete the file after it
+   # is closed (there's an arg to change that).
+   with tempfile.NamedTemporaryFile() as f:
+      f.write(s)
+      if args.n:
+         newpass = generateNewPassword()
+         today = datetime.date.today().isoformat()
+         f.write(today + "\t\t\t" + newpass + "\n")
+      f.flush()
+      res = subprocess.call([EDITOR, f.name])
+      # I worry the file may not be flushed if the above process
+      # exited poorly.
+      f.flush()
+      if res == 0:
+         # XXX: Also reads all data into memory
+         f.seek(0)
+         ns = f.read()
+         writeDataFile(ns, p)
+      else:
+         print("Editor exited uncleanly, ignoring changes.")
+
+
+if __name__ == '__main__':
+   main()
