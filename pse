@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # (Relatively) simple password safe script
 # Just opens an editor on a decryted file, then encrypts it again.
 # Uses GPG to encrypt and decrypt the given file with symmetric encryption.
@@ -48,7 +48,7 @@ SAFEFILE="safe"
 
 EDITOR="rnano"
 
-NEW_PASSWORD_LENGTH=16
+NEW_PASSWORD_LENGTH=24
 NEW_PASSWORD_CHARS="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890!@#$%^&*()_+-=[]\{}|;':\",./<>?"
 
 ###### END USER-EDITABLE CONTENT
@@ -102,16 +102,16 @@ def newDataFile():
 def readDataFile(phrase):
    if not isModeOkay(SAFEPATH):
       raise RuntimeError("Safe file does not have correct permissions!  Please fix this and try again.")
-   with file(SAFEPATH, 'rb') as f:
+   with open(SAFEPATH, 'rb') as f:
       data = gpg.decrypt_file(f, passphrase=phrase)
       if not data.ok:
          raise RuntimeError("Error reading password safe file " + SAFEPATH + ": " + data.stderr)
       return data.data
 
-def writeDataFile(str, phrase):
+def writeDataFile(st, phrase):
    if not isModeOkay(SAFEPATH):
       raise RuntimeError("Safe file does not have correct permissions!  Please fix this and try again.")
-   data = gpg.encrypt(str, None, passphrase=phrase, symmetric=True, output=SAFEPATH)
+   data = gpg.encrypt(st, None, passphrase=phrase, symmetric=True, output=SAFEPATH)
    if not data.ok:
       raise RuntimeError("Error reading password safe file " + SAFEPATH + ": " + data.stderr)
 
