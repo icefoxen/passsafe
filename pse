@@ -169,7 +169,8 @@ def main():
       if args.n:
          newpass = generateNewPassword()
          today = datetime.date.today().isoformat()
-         f.write(today + "\t\t\t" + newpass + "\n")
+         pss = today + "\t\t\t" + newpass + "\n"
+         f.write(pss.encode('utf-8'))
       f.flush()
       res = subprocess.call([EDITOR, f.name])
       # I worry the file may not be flushed if the above process
